@@ -4,15 +4,17 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Convert any Telegram sticker pack into a custom emoji pack with **one simple command**! Supports both static and animated (TGS) stickers.
+Convert any Telegram sticker pack into a custom emoji pack with **one simple command**! Supports static, animated (TGS), and video (WEBM) stickers with **full animation preservation**.
 
 ## ✨ Features
 
 - 🚀 **One-Command Conversion** - Just provide the sticker pack name
-- 🎭 **Static & Animated Support** - Handles WEBP, PNG, and TGS (Lottie) formats
+- 🎭 **Full Animation Support** - Handles WEBP, PNG, TGS (Lottie), and WEBM formats
+- ✨ **Animated Emojis** - Converts TGS to WEBM for animated emoji reactions
 - 🤖 **Fully Automated** - Downloads, converts, and creates emoji pack automatically
-- 💎 **High Quality** - Preserves transparency and image quality
+- 💎 **High Quality** - Preserves transparency, animation, and image quality
 - 🔗 **Instant Sharing** - Get a shareable `t.me/addemoji/` link immediately
+- 💾 **Save Locally** - Optional flag to keep converted files
 - 🧹 **Clean** - Automatic cleanup of temporary files
 
 ## 📋 Table of Contents
@@ -50,6 +52,7 @@ python -m sticker_to_emoji YourStickerPackName
 - Python 3.8 or higher
 - Telegram account
 - Telegram Premium (to use custom emojis as reactions)
+- ffmpeg (for animated emoji support) - install with `brew install ffmpeg` on macOS
 
 ### Step 1: Clone Repository
 
@@ -116,8 +119,14 @@ python -m sticker_to_emoji MyStickerPack -n "My Cool Emojis"
 # Limit number of emojis (default: 50)
 python -m sticker_to_emoji MyStickerPack -l 30
 
+# Save converted files locally
+python -m sticker_to_emoji MyStickerPack --save-local
+
+# Save to specific directory
+python -m sticker_to_emoji MyStickerPack --save-local -o ./my_emojis
+
 # Combined
-python -m sticker_to_emoji MyStickerPack -n "Custom Pack" -l 25
+python -m sticker_to_emoji MyStickerPack -n "Custom Pack" -l 25 --save-local
 ```
 
 ### Finding Sticker Pack Names
@@ -145,6 +154,8 @@ python -m sticker_to_emoji MyStickerPack -n "Custom Pack" -l 25
 | `--name` | `-n` | Custom name for emoji pack | Pack title |
 | `--limit` | `-l` | Max number of emojis | 50 |
 | `--help` | `-h` | Show help message | - |
+| `--save-local` | - | Save converted files locally | False |
+| `--output` | `-o` | Output directory for saved files | ./emojis |
 
 ## 📸 Examples
 
@@ -177,20 +188,30 @@ Output:
 
 ### Convert Animated Stickers (TGS)
 ```bash
-python -m sticker_to_emoji HotCherry -l 10
+python -m sticker_to_emoji AnimatedPack -l 10
 ```
 
-The tool automatically renders the first frame of animated stickers!
+Animated (TGS) stickers are converted to **WEBM animated emojis** automatically! If ffmpeg is not available or conversion fails, the tool falls back to rendering the first frame as PNG.
+
+### Save Converted Files Locally
+```bash
+python -m sticker_to_emoji MyStickerPack --save-local -o ./my_collection
+```
+
+This keeps all converted emoji files on your disk while still creating the Telegram pack.
 
 ## 🛠 How It Works
 
 1. **Fetch** - Downloads sticker pack from Telegram using Telethon
 2. **Convert** - Processes stickers:
    - Static (WEBP/PNG): Resizes and centers on transparent background
-   - Animated (TGS): Decompresses Lottie JSON and renders first frame
-3. **Upload** - Uploads converted images to Telegram Bot API
-4. **Create** - Creates custom emoji pack with Bot API
-5. **Cleanup** - Removes temporary files
+   - Animated (TGS): Converts Lottie to WEBM with VP9 codec (max 3s, ~64KB)
+   - Video (WEBM): Passes through directly
+   - Fallback: Renders first frame as PNG if WEBM conversion fails
+3. **Upload** - Uploads converted files to Telegram Bot API
+4. **Create** - Creates custom emoji pack with Bot API (supports animated emojis!)
+5. **Save** - Optionally saves files locally with `--save-local`
+6. **Cleanup** - Removes temporary files (unless saved locally)
 
 ## 🐛 Troubleshooting
 

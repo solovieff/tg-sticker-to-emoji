@@ -13,7 +13,7 @@ requirements = [req.strip() for req in requirements if req.strip() and not req.s
 
 setup(
     name="tg-sticker-to-emoji",
-    version="1.0.0",
+    version="1.1.0",
     author="Telegram Sticker Converter Contributors",
     description="Convert Telegram sticker packs to custom emoji packs",
     long_description=long_description,
