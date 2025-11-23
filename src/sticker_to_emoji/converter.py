@@ -53,6 +53,10 @@ class StickerToEmojiConverter:
                     return True
         return sticker.mime_type == 'application/x-tgsticker'
     
+    def is_video_sticker(self, sticker: Document) -> bool:
+        """Check if sticker is video (WEBM format)."""
+        return sticker.mime_type == 'video/webm'
+    
     def render_tgs_to_png(self, tgs_bytes: bytes, output_path: Path, size: int = 100):
         """Render TGS (Lottie) animation to PNG (first frame)."""
         try:
@@ -101,7 +105,7 @@ class StickerToEmojiConverter:
         except Exception as e:
             raise ValueError(f"Could not retrieve sticker pack: {e}")
     
-    async def download_and_convert_stickers(self, sticker_set, output_dir: Path, limit: int = 50):
+    async def download_and_convert_stickers(self, sticker_set, output_dir: Path, limit: int = 50, is_video: bool = False):
         """Download stickers and convert to emoji format."""
         stickers = sticker_set.documents
         pack_title = sticker_set.set.title
@@ -127,7 +131,19 @@ class StickerToEmojiConverter:
                         emoji = attr.alt or '😀'
                         break
                 
-                filename = f"emoji_{len(converted)+1:03d}_{emoji}.png"
+                # Check sticker type
+                is_video_sticker = self.is_video_sticker(sticker)
+                is_tgs = self.is_animated_sticker(sticker)
+                
+                # Determine file extension and format
+                if is_video_sticker:
+                    file_ext = '.webm'
+                    sticker_format = 'video'
+                else:
+                    file_ext = '.png'
+                    sticker_format = 'static'
+                
+                filename = f"emoji_{len(converted)+1:03d}_{emoji}{file_ext}"
                 filepath = output_dir / filename
                 
                 print(f"  {len(converted)+1}/{limit}: {emoji}", end=' ')
@@ -135,10 +151,11 @@ class StickerToEmojiConverter:
                 # Download sticker
                 file_bytes = await self.client.download_media(sticker, file=bytes)
                 
-                # Check if animated (TGS)
-                is_animated = self.is_animated_sticker(sticker)
-                
-                if is_animated:
+                if is_video_sticker:
+                    # Save video sticker as-is (WEBM)
+                    with open(filepath, 'wb') as f:
+                        f.write(file_bytes)
+                elif is_tgs:
                     # Render TGS to PNG
                     success = self.render_tgs_to_png(file_bytes, filepath, size=100)
                     if not success:
@@ -159,7 +176,7 @@ class StickerToEmojiConverter:
                         
                         emoji_img.save(filepath, format='PNG', optimize=True)
                 
-                converted.append((filepath, emoji))
+                converted.append((filepath, emoji, sticker_format))
                 print("✓")
                 
             except Exception as e:
@@ -168,7 +185,7 @@ class StickerToEmojiConverter:
         
         print(f"\n✅ Converted {len(converted)} stickers")
         if skipped > 0:
-            print(f"⏭️  Skipped {skipped} animated stickers")
+            print(f"⏭️  Skipped {skipped} stickers")
         
         return converted, pack_title
     
@@ -205,18 +222,25 @@ class StickerToEmojiConverter:
         
         # Upload files
         stickers = []
-        for i, (filepath, emoji) in enumerate(emoji_files, 1):
+        for i, file_info in enumerate(emoji_files, 1):
             try:
+                filepath, emoji, sticker_format = file_info
                 print(f"   Uploading {i}/{len(emoji_files)}: {emoji}", end=' ')
                 
                 # Upload file
                 url = f"{self.bot_api_url}/uploadStickerFile"
                 data = aiohttp.FormData()
                 data.add_field('user_id', str(self.user_id))
-                data.add_field('sticker_format', 'static')
+                data.add_field('sticker_format', sticker_format)
+                
+                # Determine content type based on format
+                if sticker_format == 'video':
+                    content_type = 'video/webm'
+                else:
+                    content_type = 'image/png'
                 
                 with open(filepath, 'rb') as f:
-                    data.add_field('sticker', f, filename=filepath.name, content_type='image/png')
+                    data.add_field('sticker', f, filename=filepath.name, content_type=content_type)
                     
                     async with session.post(url, data=data) as response:
                         result = await response.json()
@@ -230,7 +254,7 @@ class StickerToEmojiConverter:
                 stickers.append({
                     'sticker': file_id,
                     'emoji_list': [emoji],
-                    'format': 'static'
+                    'format': sticker_format
                 })
                 
                 print("✓")
@@ -273,6 +297,8 @@ async def main():
     parser.add_argument("sticker_pack", help="Sticker pack name or URL")
     parser.add_argument("-n", "--name", help="Custom name for emoji pack (optional)")
     parser.add_argument("-l", "--limit", type=int, default=50, help="Max emojis (default: 50)")
+    parser.add_argument("--save-local", action="store_true", help="Save converted files locally instead of deleting")
+    parser.add_argument("-o", "--output", default="emoji_output", help="Output directory for --save-local (default: emoji_output)")
     args = parser.parse_args()
     
     # Load environment
@@ -346,6 +372,18 @@ async def main():
                 print(f"\n✅ Success! Emoji pack created!")
                 print(f"🔗 {pack_url}")
                 print(f"\n💡 Add this pack in Telegram and use emojis as reactions!")
+                
+                # Save locally if requested
+                if args.save_local:
+                    import shutil
+                    output_path = Path(args.output)
+                    output_path.mkdir(parents=True, exist_ok=True)
+                    
+                    for filepath, _, _ in emoji_files:
+                        dest = output_path / filepath.name
+                        shutil.copy2(filepath, dest)
+                    
+                    print(f"\n💾 Files saved to: {output_path.absolute()}")
         
     except KeyboardInterrupt:
         print("\n\n⚠️  Cancelled", file=sys.stderr)
@@ -354,9 +392,9 @@ async def main():
         print(f"\n❌ Error: {e}", file=sys.stderr)
         sys.exit(1)
     finally:
-        # Cleanup temp files
+        # Cleanup temp files (unless save-local is used)
         import shutil
-        if temp_dir.exists():
+        if temp_dir.exists() and not args.save_local:
             shutil.rmtree(temp_dir)
 
 
