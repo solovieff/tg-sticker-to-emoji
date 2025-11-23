@@ -58,7 +58,7 @@ class StickerToEmojiConverter:
         return sticker.mime_type == 'video/webm'
     
     def render_tgs_to_png(self, tgs_bytes: bytes, output_path: Path, size: int = 100):
-        """Render TGS (Lottie) animation to PNG (first frame)."""
+        """Render TGS (Lottie) animation to PNG (first frame) - for static emojis."""
         try:
             # Decompress gzip
             decompressed = gzip.decompress(tgs_bytes)
@@ -82,6 +82,77 @@ class StickerToEmojiConverter:
             
         except Exception as e:
             # Fallback: if rendering fails, skip
+            return False
+    
+    def render_tgs_to_webm(self, tgs_bytes: bytes, output_path: Path, size: int = 100):
+        """Render TGS (Lottie) animation to WEBM - for animated emojis."""
+        try:
+            import subprocess
+            import tempfile
+            
+            # Decompress gzip
+            decompressed = gzip.decompress(tgs_bytes)
+            
+            # Load animation with rlottie  
+            anim = LottieAnimation.from_data(decompressed.decode('utf-8'))
+            
+            # Get total frames and FPS
+            total_frames = anim.lottie_animation_get_totalframe()
+            fps = anim.lottie_animation_get_framerate()
+            if total_frames == 0 or fps == 0:
+                return False
+            
+            # Telegram limit: max 3 seconds for custom emoji
+            max_duration = 3.0
+            max_frames = int(fps * max_duration)
+            frames_to_render = min(total_frames, max_frames)
+            
+            # Create temp directory for frames
+            with tempfile.TemporaryDirectory() as tmpdir:
+                frames_dir = Path(tmpdir)
+                
+                # Render frames (limited to 3 seconds)
+                for frame_num in range(frames_to_render):
+                    img = anim.render_pillow_frame(frame_num, width=size, height=size)
+                    if img.mode != 'RGBA':
+                        img = img.convert('RGBA')
+                    
+                    frame_path = frames_dir / f"frame_{frame_num:04d}.png"
+                    img.save(frame_path, format='PNG')
+                
+                # Check if ffmpeg is available
+                try:
+                    subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    # FFmpeg not available, fallback to first frame PNG
+                    return False
+                
+                # Calculate actual duration
+                duration = frames_to_render / fps
+                
+                # Convert frames to WEBM using ffmpeg
+                # Telegram custom emoji limits: ~64KB size, max 3 seconds
+                ffmpeg_cmd = [
+                    'ffmpeg', '-y', '-loglevel', 'error',
+                    '-framerate', str(fps),
+                    '-i', str(frames_dir / 'frame_%04d.png'),
+                    '-c:v', 'libvpx-vp9',
+                    '-pix_fmt', 'yuva420p',
+                    '-auto-alt-ref', '0',
+                    '-b:v', '50k',  # Bitrate limit
+                    '-maxrate', '50k',
+                    '-bufsize', '100k',
+                    '-quality', 'realtime',
+                    '-speed', '8',  # Faster encoding
+                    '-t', str(duration),
+                    '-fs', '64000',  # File size limit 64KB
+                    str(output_path)
+                ]
+                
+                result = subprocess.run(ffmpeg_cmd, capture_output=True)
+                return result.returncode == 0
+            
+        except Exception as e:
             return False
     
     async def get_sticker_pack(self, pack_name: str):
@@ -156,12 +227,21 @@ class StickerToEmojiConverter:
                     with open(filepath, 'wb') as f:
                         f.write(file_bytes)
                 elif is_tgs:
-                    # Render TGS to PNG
-                    success = self.render_tgs_to_png(file_bytes, filepath, size=100)
-                    if not success:
-                        print("✗ (TGS render failed)")
-                        skipped += 1
-                        continue
+                    # Try to render TGS to WEBM for animated emoji
+                    webm_path = filepath.with_suffix('.webm')
+                    success = self.render_tgs_to_webm(file_bytes, webm_path, size=100)
+                    
+                    if success:
+                        # Update filepath and format for animated emoji
+                        filepath = webm_path
+                        sticker_format = 'video'
+                    else:
+                        # Fallback to PNG (first frame)
+                        success = self.render_tgs_to_png(file_bytes, filepath, size=100)
+                        if not success:
+                            print("✗ (TGS render failed)")
+                            skipped += 1
+                            continue
                 else:
                     # Convert static sticker to emoji format
                     with Image.open(io.BytesIO(file_bytes)) as img:
@@ -336,6 +416,7 @@ async def main():
     # Create temporary directory
     temp_dir = Path("temp_emojis")
     temp_dir.mkdir(exist_ok=True)
+    save_local = args.save_local  # Store for finally block
     
     try:
         # Setup SSL context
@@ -394,7 +475,7 @@ async def main():
     finally:
         # Cleanup temp files (unless save-local is used)
         import shutil
-        if temp_dir.exists() and not args.save_local:
+        if temp_dir.exists() and not save_local:
             shutil.rmtree(temp_dir)
 
 
